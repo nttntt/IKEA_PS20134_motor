@@ -27,15 +27,17 @@ volatile bool lowerLimit = false;
 void motorTask(void *pvParameters)
 {
   static uint8_t sStep = 0;
+  static uint8_t sState = 0;
 
   while (1)
   {
-    if (gDirection == 0)
+    if (gDirection == 0 && sState == 1)
     {
       digitalWrite(AIN1, LOW);
       digitalWrite(AIN2, LOW);
       digitalWrite(BIN1, LOW);
       digitalWrite(BIN2, LOW);
+      sState = 0;
     }
     else
     {
@@ -47,6 +49,7 @@ void motorTask(void *pvParameters)
       {
         sStep = (sStep + 3) % 4;
       }
+      sState = 1;
 
       switch (sStep)
       {
@@ -76,7 +79,7 @@ void motorTask(void *pvParameters)
         break;
       }
     }
-    delay(1);//delayMicroseconds(wait);
+    delay(1); // delayMicroseconds(wait);
   }
 }
 
@@ -84,16 +87,23 @@ void setup()
 {
   Serial.begin(115200);
 
-  pinMode(AIN1, OUTPUT); // モーター制御
+  pinMode(AIN1, OUTPUT); // モーター制御Pin & 初期化
   pinMode(AIN2, OUTPUT);
   pinMode(BIN2, OUTPUT);
   pinMode(BIN1, OUTPUT);
 
+  digitalWrite(AIN1, LOW);
+  digitalWrite(AIN2, LOW);
+  digitalWrite(BIN1, LOW);
+  digitalWrite(BIN2, LOW);
+
   pinMode(UPPER_SW_PIN, INPUT); // 上下限リミッター
   pinMode(LOWER_SW_PIN, INPUT);
 
-  pinMode(ECHO_PIN, INPUT);
+  pinMode(ECHO_PIN, INPUT); // 距離センサーPin & 初期化
   pinMode(TRIG_PIN, OUTPUT);
+
+  digitalWrite(TRIG_PIN, LOW);
 
   xTaskCreatePinnedToCore(motorTask, "motorTask", 8192, NULL, 1, NULL, 0);
 }
@@ -107,11 +117,10 @@ void loop()
   upperLimit = !digitalRead(UPPER_SW_PIN);
   lowerLimit = !digitalRead(LOWER_SW_PIN);
 
-
   digitalWrite(TRIG_PIN, LOW);
   delayMicroseconds(1);
   digitalWrite(TRIG_PIN, HIGH); //超音波を出力
-  delayMicroseconds(11);        //
+  delayMicroseconds(10);        //
   digitalWrite(TRIG_PIN, LOW);
   duration = pulseIn(ECHO_PIN, HIGH, 5000); //センサからの入力
   if (duration == 0)
@@ -132,6 +141,6 @@ void loop()
   Serial.print(" Distance:");
   Serial.print(Distance);
   Serial.println(" cm");
-  
+
   delay(100);
 }
