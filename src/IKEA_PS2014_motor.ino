@@ -18,8 +18,6 @@
 #define INITIAL_STAGE 3      // 初期エラー対策を行うステップ数
 #define CONTROL_STAGE 9      // 操作開始のステップ数
 
-// 停止間隔
-uint16_t wait = 700;
 
 // 移動方向
 volatile int8_t gDirection = 0;
@@ -29,15 +27,17 @@ uint8_t motionControl(void);
 void motorTask(void *pvParameters)
 {
   static uint8_t sStep = 0;
+  static uint8_t sState = 0;
 
   while (1)
   {
-    if (gDirection == 0)
+    if (gDirection == 0 && sState == 1)
     {
       digitalWrite(AIN1, LOW);
       digitalWrite(AIN2, LOW);
       digitalWrite(BIN1, LOW);
       digitalWrite(BIN2, LOW);
+      sState = 0;
     }
     else
     {
@@ -49,6 +49,7 @@ void motorTask(void *pvParameters)
       {
         sStep = (sStep + 3) % 4;
       }
+      sState = 1;
 
       switch (sStep)
       {
@@ -78,7 +79,7 @@ void motorTask(void *pvParameters)
         break;
       }
     }
-    delay(1); // delayMicroseconds(wait);
+    delay(1);
   }
 }
 
@@ -86,16 +87,23 @@ void setup()
 {
   Serial.begin(115200);
 
-  pinMode(AIN1, OUTPUT); // モーター制御
+  pinMode(AIN1, OUTPUT); // モーター制御Pin & 初期化
   pinMode(AIN2, OUTPUT);
   pinMode(BIN2, OUTPUT);
   pinMode(BIN1, OUTPUT);
 
+  digitalWrite(AIN1, LOW);
+  digitalWrite(AIN2, LOW);
+  digitalWrite(BIN1, LOW);
+  digitalWrite(BIN2, LOW);
+
   pinMode(UPPER_SW_PIN, INPUT_PULLUP); // 上下限リミッター
   pinMode(LOWER_SW_PIN, INPUT_PULLUP);
 
-  pinMode(ECHO_PIN, INPUT);
+  pinMode(ECHO_PIN, INPUT); // 距離センサーPin & 初期化
   pinMode(TRIG_PIN, OUTPUT);
+
+  digitalWrite(TRIG_PIN, LOW);
 
   xTaskCreatePinnedToCore(motorTask, "motorTask", 8192, NULL, 1, NULL, 0);
 }
