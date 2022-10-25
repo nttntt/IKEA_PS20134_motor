@@ -1,4 +1,5 @@
-#include <EEPROM.h>
+#define FASTLED_ESP32_I2S true
+#include <FastLED.h>
 
 // モーターの制御Pin
 #define AIN1 16 // 黒
@@ -7,17 +8,26 @@
 #define BIN2 18 // 青
 
 // リミッターの入力Pin
-#define UPPER_SW_PIN 0
-#define LOWER_SW_PIN 2
+#define UPPER_SW_PIN 13
+#define LOWER_SW_PIN 4
 
 // 超音波距離センサーのPin
 #define ECHO_PIN 19 // Echo Pin
 #define TRIG_PIN 15 // Trigger Pin
 
-#define MOVING_THRESHOLD 200 // 上下と静止モーションのthreshold
-#define INITIAL_STAGE 3      // 初期エラー対策を行うステップ数
-#define CONTROL_STAGE 9      // 操作開始のステップ数
+// モーションコントロール関連
+#define UPPER_THRESHOLD 900  // 上下のthreshold
+#define LOWER_THRESHOLD 4000 // 操作の最遠
+#define INITIAL_STAGE 2      // 初期エラー対策を行うステップ数
+#define CONTROL_STAGE 4      // モーション確定のステップ数
 
+// LED関連
+#define DATA_PIN 22
+#define LED_TYPE WS2812B
+#define COLOR_ORDER RGB
+#define NUM_LEDS 32
+#define BRIGHTNESS 255
+CRGB leds[NUM_LEDS];
 
 // 移動方向
 volatile int8_t gDirection = 0;
@@ -31,7 +41,7 @@ void motorTask(void *pvParameters)
 
   while (1)
   {
-    if (gDirection == 0 && sState == 1)
+    if (gDirection == 0) //&& sState == 1
     {
       digitalWrite(AIN1, LOW);
       digitalWrite(AIN2, LOW);
@@ -105,31 +115,40 @@ void setup()
 
   digitalWrite(TRIG_PIN, LOW);
 
+  FastLED.addLeds<LED_TYPE, DATA_PIN, COLOR_ORDER>(leds, NUM_LEDS);
+  FastLED.setBrightness(BRIGHTNESS);
+
   xTaskCreatePinnedToCore(motorTask, "motorTask", 8192, NULL, 1, NULL, 0);
 }
 
 void loop()
 {
-  uint8_t motion = motionControl();
+  static uint8_t hue = 0;
+  uint8_t changeColor = 0;
 
-  delay(100);
+  changeColor = motionControl();
+  if (changeColor)
+  {
+    hue += 32;
+  }
+  solid(hue);
+  FastLED.show();
+
+  delay(50);
 }
 
 uint8_t motionControl()
 {
-  static int32_t sFirstDuration = 0; //初回の距離
-  static int8_t sCounter = 0;
-  static int8_t sDirection = 0; // 位置のばらつき吸収用
+  static int8_t sCounter = 0;     //カウンター
+  static int8_t sDoubleClick = 0; // 色変更の操作
 
-  int tmp_return = 0; //デバッグ表示のための変数 完成後はこれ関連はすべて消してOK
-
-  // digitalWrite(TRIG_PIN, LOW);
-  // delayMicroseconds(1);
-  digitalWrite(TRIG_PIN, HIGH); //超音波を出力
-  delayMicroseconds(10);        //
   digitalWrite(TRIG_PIN, LOW);
-  int32_t duration = pulseIn(ECHO_PIN, HIGH, 4500); //センサからの入力
-  bool upperLimit = digitalRead(UPPER_SW_PIN);      // Limiterの状態
+  delayMicroseconds(1);
+  digitalWrite(TRIG_PIN, HIGH); // 超音波を出力
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+  int32_t duration = pulseIn(ECHO_PIN, HIGH, LOWER_THRESHOLD); //センサからの入力
+  bool upperLimit = digitalRead(UPPER_SW_PIN);                 // Limiterの状態
   bool lowerLimit = digitalRead(LOWER_SW_PIN);
 
   // 1.カウンターが初期段階（＝反応直後の数値の揺れの処理時間）の間は
@@ -139,40 +158,25 @@ uint8_t motionControl()
     if (!duration)
     {
       sCounter = 0;
-      sFirstDuration = 0;
-      tmp_return = 0;
     }
     // 反応ありならカウンタースタート
     else
     {
       sCounter++;
-      sFirstDuration = duration;
-      sDirection = 0;
-      tmp_return = 0;
+      sDoubleClick = 0;
     }
   }
 
   // 2.どの操作のつもりか確認の時間
-  else if (sCounter < CONTROL_STAGE)
+  else if (sCounter <= CONTROL_STAGE)
   {
-    // 無反応ならカウンターダウン（センサーのブレを考慮してすぐに終了にはしない）
+    // 無反応ならダブルクリック判定モードへ
     if (!duration)
     {
-      sCounter--;
-    }
-    // 初回よりも閾値以上に小さければ方向カウンタダウン
-    else if (duration < sFirstDuration - MOVING_THRESHOLD)
-    {
       sCounter++;
-      sDirection--;
+      sDoubleClick = 1;
     }
-    // 初回よりも閾値以上に大きければ方向カウンタアップ
-    else if (duration > sFirstDuration + MOVING_THRESHOLD)
-    {
-      sCounter++;
-      sDirection++;
-    }
-    // 初回と閾値以内の差ならばカウンターだけアップ
+    // 反応継続ならカウンターだけアップ
     else
     {
       sCounter++;
@@ -180,42 +184,50 @@ uint8_t motionControl()
   }
 
   // 操作段階までカウンターが進んだとき
-  else if (sCounter >= CONTROL_STAGE)
+  else if (sCounter > CONTROL_STAGE)
   {
-    // すでにモーター稼働中で無反応なら即停止
-    if (gDirection && !duration)
+    // 無反応なら即停止
+    if (!duration)
+    {
+      gDirection = 0;
+      sCounter = 0;
+    }
+    // ダブルクリック判定モード中で反応ありなら色変更
+    else if (sDoubleClick && duration)
+    {
+      gDirection = 0;
+      sCounter = 0;
+      return 1;
+    }
+    // 上下の限界で手を離したら即停止（頻繁に使うので
+    /*else if ((upperLimit || lowerLimit) && !duration)
     {
       gDirection = 0;
       sCounter = 0;
       sFirstDuration = 0;
       sDirection = 0;
-      tmp_return = 0;
-    }
-    // ある程度静止していたら色変更モード確定でカウンターリセット
-    else if (abs(sDirection) < 3)
-    {
-      gDirection = 0;
-      sCounter = 0;
-      sFirstDuration = 0;
-      sDirection = 0;
-      tmp_return = 9;
-    }
-
-    // 手を最初の位置よりも近づけていて端まで来ていなければモーター上昇
-    else if ((duration < sFirstDuration) && !upperLimit)
+    }*/
+    // 手をUPPER_THRESHOLDよりも近づけていて端まで来ていなければモーター上昇
+    else if ((duration < UPPER_THRESHOLD) && !upperLimit)
     {
       gDirection = -1;
-      tmp_return = -1;
     }
-    // 手を最初の位置よりも下げていて端まで来ていなければモーター下降
-    else if ((duration > sFirstDuration) && !lowerLimit)
+
+    // 手をUPPER_THRESHOLDよりも離していて端まで来ていなければモーター下降
+    else if ((duration >= UPPER_THRESHOLD) && !lowerLimit)
     {
       gDirection = 1;
-      tmp_return = 1;
+    }
+
+    // リミッターにかかっているときは停止
+    else
+    {
+      gDirection = 0;
     }
   }
 
-  if (sCounter || tmp_return)
+  // パラメーター表示
+  if (sCounter)
   {
     Serial.print(sCounter);
     Serial.print(" |");
@@ -230,18 +242,24 @@ uint8_t motionControl()
         Serial.print(" ");
       }
     }
-    Serial.print("return");
-    Serial.print(tmp_return);
 
     Serial.print(" Direction");
-    Serial.print(sDirection);
+    Serial.print(gDirection);
 
     Serial.print(" ");
     Serial.print(upperLimit);
     Serial.print(" ");
     Serial.print(lowerLimit);
-
+    Serial.print(" duration");
+    Serial.print(sDoubleClick);
     Serial.println("");
   }
   return 0;
+}
+
+void solid(uint8_t hue)
+{
+  // 普通の光
+
+  fill_solid(leds, NUM_LEDS, CHSV(hue, 255, 64));
 }
