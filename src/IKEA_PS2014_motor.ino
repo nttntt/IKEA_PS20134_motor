@@ -18,8 +18,8 @@
 // モーションコントロール関連
 #define UPPER_THRESHOLD 900  // 上下のthreshold
 #define LOWER_THRESHOLD 4000 // 操作の最遠
-#define INITIAL_STAGE 2      // 初期エラー対策を行うステップ数
-#define CONTROL_STAGE 4      // モーション確定のステップ数
+#define INITIAL_STAGE 3      // 初期エラー対策を行うステップ数
+#define CONTROL_STAGE 10      // モーション確定のステップ数
 
 // LED関連
 #define DATA_PIN 22
@@ -139,8 +139,8 @@ void loop()
 
 uint8_t motionControl()
 {
-  static int8_t sCounter = 0;     //カウンター
-  static int8_t sDoubleClick = 0; // 色変更の操作
+  static uint8_t sCounter = 0; //カウンター
+  static uint8_t sRelease = 0; // 通過した回数
 
   digitalWrite(TRIG_PIN, LOW);
   delayMicroseconds(1);
@@ -151,35 +151,43 @@ uint8_t motionControl()
   bool upperLimit = digitalRead(UPPER_SW_PIN);                 // Limiterの状態
   bool lowerLimit = digitalRead(LOWER_SW_PIN);
 
-  // 1.カウンターが初期段階（＝反応直後の数値の揺れの処理時間）の間は
-  if (sCounter <= INITIAL_STAGE)
+  if (sCounter <= CONTROL_STAGE)
   {
-    // 無反応なら0にもどす（誤反応の排除と信号の安定待ち）
-    if (!duration)
+    // 反応あったら
+    if (duration)
     {
-      sCounter = 0;
+      sCounter++;
+      // フェーズ進行
+      if (sRelease == 0)
+      {
+        sRelease = 1;
+      }
+      // 2回目のカウンタースタート
+      else if (sRelease == 2)
+      {
+        sRelease = 3;
+      }
     }
-    // 反応ありならカウンタースタート
+    //反応なく
     else
-    {
-      sCounter++;
-      sDoubleClick = 0;
-    }
-  }
-
-  // 2.どの操作のつもりか確認の時間
-  else if (sCounter <= CONTROL_STAGE)
-  {
-    // 無反応ならダブルクリック判定モードへ
-    if (!duration)
-    {
-      sCounter++;
-      sDoubleClick = 1;
-    }
-    // 反応継続ならカウンターだけアップ
-    else
-    {
-      sCounter++;
+    { // 操作後初めての無反応なら1回目のリリース
+      if (sRelease == 1)
+      {
+        sRelease = 2;
+        sCounter++;
+      }
+      // 2回目の無反応なら色変更モード
+      else if (sRelease == 3)
+      {
+        gDirection = 0;
+        sCounter = 0;
+        sRelease = 0;
+        return 1;
+      }
+      else if (sRelease)
+      {
+        sCounter++;
+      }
     }
   }
 
@@ -191,22 +199,9 @@ uint8_t motionControl()
     {
       gDirection = 0;
       sCounter = 0;
+      sRelease = 0;
     }
-    // ダブルクリック判定モード中で反応ありなら色変更
-    else if (sDoubleClick && duration)
-    {
-      gDirection = 0;
-      sCounter = 0;
-      return 1;
-    }
-    // 上下の限界で手を離したら即停止（頻繁に使うので
-    /*else if ((upperLimit || lowerLimit) && !duration)
-    {
-      gDirection = 0;
-      sCounter = 0;
-      sFirstDuration = 0;
-      sDirection = 0;
-    }*/
+
     // 手をUPPER_THRESHOLDよりも近づけていて端まで来ていなければモーター上昇
     else if ((duration < UPPER_THRESHOLD) && !upperLimit)
     {
@@ -251,7 +246,7 @@ uint8_t motionControl()
     Serial.print(" ");
     Serial.print(lowerLimit);
     Serial.print(" duration");
-    Serial.print(sDoubleClick);
+    Serial.print(sRelease);
     Serial.println("");
   }
   return 0;
