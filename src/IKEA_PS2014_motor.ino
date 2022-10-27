@@ -1,4 +1,4 @@
-#define FASTLED_ESP32_I2S true
+#define FASTLED_ESP32_I2S true // 6cm*5.5 (6.8cm)  9.5*5.5
 #include <FastLED.h>
 
 // モーターの制御Pin
@@ -16,10 +16,10 @@
 #define TRIG_PIN 15 // Trigger Pin
 
 // モーションコントロール関連
-#define UPPER_THRESHOLD 900  // 上下のthreshold
-#define LOWER_THRESHOLD 4000 // 操作の最遠
-#define INITIAL_STAGE 3      // 初期エラー対策を行うステップ数
-#define CONTROL_STAGE 10      // モーション確定のステップ数
+#define CONTROL_THRESHOLD 800 // 上下のthreshold(cm *59)
+#define DETECT_THRESHOLD 4000 // 反応範囲
+#define OPERATE_STEP 5        // 操作判定を行うステップ数
+#define INTERVAL_STEP 8       // モーション確定のステップ数
 
 // LED関連
 #define DATA_PIN 22
@@ -101,24 +101,23 @@ void setup()
   pinMode(AIN2, OUTPUT);
   pinMode(BIN2, OUTPUT);
   pinMode(BIN1, OUTPUT);
-
   digitalWrite(AIN1, LOW);
   digitalWrite(AIN2, LOW);
   digitalWrite(BIN1, LOW);
   digitalWrite(BIN2, LOW);
 
-  pinMode(UPPER_SW_PIN, INPUT_PULLUP); // 上下限リミッター
-  pinMode(LOWER_SW_PIN, INPUT_PULLUP);
-
   pinMode(ECHO_PIN, INPUT); // 距離センサーPin & 初期化
   pinMode(TRIG_PIN, OUTPUT);
-
   digitalWrite(TRIG_PIN, LOW);
+
+  pinMode(UPPER_SW_PIN, INPUT_PULLUP); // 上下限リミッター
+  pinMode(LOWER_SW_PIN, INPUT_PULLUP);
 
   FastLED.addLeds<LED_TYPE, DATA_PIN, COLOR_ORDER>(leds, NUM_LEDS);
   FastLED.setBrightness(BRIGHTNESS);
 
   xTaskCreatePinnedToCore(motorTask, "motorTask", 8192, NULL, 1, NULL, 0);
+  delay(10);// 立ち上がり超音波センサーにノイズが乗るのでウエイト　　他の処理が入って時間かかるようになったら消してOK
 }
 
 void loop()
@@ -139,90 +138,120 @@ void loop()
 
 uint8_t motionControl()
 {
-  static uint8_t sCounter = 0; //カウンター
-  static uint8_t sRelease = 0; // 通過した回数
+  static uint8_t sPhase = 0;   // コントロールのフェーズ
+  static uint8_t sCounter = 0; // カウンター
+  static uint8_t sTimes = 0;   // 反応した回数
 
   digitalWrite(TRIG_PIN, LOW);
   delayMicroseconds(1);
   digitalWrite(TRIG_PIN, HIGH); // 超音波を出力
   delayMicroseconds(10);
   digitalWrite(TRIG_PIN, LOW);
-  int32_t duration = pulseIn(ECHO_PIN, HIGH, LOWER_THRESHOLD); //センサからの入力
-  bool upperLimit = digitalRead(UPPER_SW_PIN);                 // Limiterの状態
+  int32_t duration = pulseIn(ECHO_PIN, HIGH, DETECT_THRESHOLD); //センサからの入力
+  bool upperLimit = digitalRead(UPPER_SW_PIN);                  // Limiterの状態
   bool lowerLimit = digitalRead(LOWER_SW_PIN);
 
-  if (sCounter <= CONTROL_STAGE)
+  switch (sPhase)
   {
-    // 反応あったら
+  // 操作待ちフェーズ
+  case 0:
     if (duration)
     {
+      sPhase = 1;
       sCounter++;
-      // フェーズ進行
-      if (sRelease == 0)
-      {
-        sRelease = 1;
-      }
-      // 2回目のカウンタースタート
-      else if (sRelease == 2)
-      {
-        sRelease = 3;
-      }
+      sTimes++;
     }
-    //反応なく
-    else
-    { // 操作後初めての無反応なら1回目のリリース
-      if (sRelease == 1)
-      {
-        sRelease = 2;
-        sCounter++;
-      }
-      // 2回目の無反応なら色変更モード
-      else if (sRelease == 3)
-      {
-        gDirection = 0;
-        sCounter = 0;
-        sRelease = 0;
-        return 1;
-      }
-      else if (sRelease)
-      {
-        sCounter++;
-      }
-    }
-  }
+    break;
 
-  // 操作段階までカウンターが進んだとき
-  else if (sCounter > CONTROL_STAGE)
-  {
-    // 無反応なら即停止
+  // モーション判別フェーズ
+  case 1:
+    sCounter++;
+    if (duration)
+    {
+      sTimes++;
+    }
+    if (sCounter > OPERATE_STEP) // 判定回数に達した時
+    {
+      if (duration) // 操作継続中ならモーター駆動フェーズへ
+      {
+        sPhase = 4;
+      }
+      else // 反応なしなら待ち時間タイマーをセットしてダブルクリック判定フェーズへ
+      {
+        sPhase = 2;
+        sCounter = INTERVAL_STEP;
+      }
+    }
+    break;
+
+  // ダブルクリック判定フェーズ 2回目待ち
+  case 2:
+    sCounter--;
+    if (duration) // 2回目の反応があったら次のフェーズへ
+    {
+      sPhase = 3;
+    }
+    else if (!sCounter) // 時間切れならリセット
+    {
+      sPhase = 0;
+      sCounter = 0;
+      sTimes = 0;
+    }
+    break;
+
+  // ダブルクリック判定フェーズ リリース待ち
+  case 3:
+    if (!duration)
+    {
+      sPhase = 0;
+      sCounter = 0;
+      sTimes = 0;
+      return 1;
+    }
+    break;
+
+  // モーター駆動フェーズ
+  case 4:
+    // 無反応なら停止して操作ミスの猶予待ちのカウントダウン
     if (!duration)
     {
       gDirection = 0;
-      sCounter = 0;
-      sRelease = 0;
+      sCounter--;
+      if (!sCounter)
+      {
+        sPhase = 0;
+        sCounter = 0;
+        sTimes = 0;
+      }
     }
-
-    // 手をUPPER_THRESHOLDよりも近づけていて端まで来ていなければモーター上昇
-    else if ((duration < UPPER_THRESHOLD) && !upperLimit)
-    {
-      gDirection = -1;
-    }
-
-    // 手をUPPER_THRESHOLDよりも離していて端まで来ていなければモーター下降
-    else if ((duration >= UPPER_THRESHOLD) && !lowerLimit)
-    {
-      gDirection = 1;
-    }
-
-    // リミッターにかかっているときは停止
+    // 操作中なら猶予カウンターリセットして
     else
     {
-      gDirection = 0;
+      sCounter = OPERATE_STEP;
+
+      // CONTROL_THRESHOLDよりも手を近づけていて端まで来ていなければモーター上昇
+      if ((duration < CONTROL_THRESHOLD) && !upperLimit)
+      {
+        gDirection = -1;
+      }
+
+      // CONTROL_THRESHOLDよりも手を離していて端まで来ていなければモーター下降
+      else if ((duration >= CONTROL_THRESHOLD) && !lowerLimit)
+      {
+        gDirection = 1;
+      }
+
+      // リミッターにかかっているときは停止
+      else
+      {
+        gDirection = 0;
+      }
     }
+    break;
   }
 
   // パラメーター表示
-  if (sCounter)
+  if (sPhase)
   {
     Serial.print(sCounter);
     Serial.print(" |");
@@ -238,15 +267,17 @@ uint8_t motionControl()
       }
     }
 
-    Serial.print(" Direction");
-    Serial.print(gDirection);
-
-    Serial.print(" ");
+    Serial.print("|");
     Serial.print(upperLimit);
     Serial.print(" ");
     Serial.print(lowerLimit);
-    Serial.print(" duration");
-    Serial.print(sRelease);
+    Serial.print(" Phase");
+    Serial.print(sPhase);
+    Serial.print(" Times");
+    Serial.print(sTimes);
+    Serial.print(" Direction");
+    Serial.print(gDirection);
+
     Serial.println("");
   }
   return 0;
