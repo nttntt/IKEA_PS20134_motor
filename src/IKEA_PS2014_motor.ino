@@ -117,7 +117,7 @@ void setup()
   FastLED.setBrightness(BRIGHTNESS);
 
   xTaskCreatePinnedToCore(motorTask, "motorTask", 8192, NULL, 1, NULL, 0);
-  delay(10);// 立ち上がり超音波センサーにノイズが乗るのでウエイト　　他の処理が入って時間かかるようになったら消してOK
+  delay(10); // 立ち上がり超音波センサーにノイズが乗るのでウエイト　　他の処理が入って時間かかるようになったら消してOK
 }
 
 void loop()
@@ -130,7 +130,7 @@ void loop()
   {
     hue += 32;
   }
-  solid(hue);
+  roundRainbow(hue);
   FastLED.show();
 
   delay(50);
@@ -287,5 +287,27 @@ void solid(uint8_t hue)
 {
   // 普通の光
 
-  fill_solid(leds, NUM_LEDS, CHSV(hue, 255, 64));
+  fill_solid(leds, NUM_LEDS, CHSV(hue, 255, 255));
+}
+
+void round(uint8_t hue)
+{
+  // 回転
+  static uint8_t r = 0;
+
+  fadeToBlackBy(leds, 24, 255);
+  for (uint8_t i = 0; i < 4; ++i)
+  {
+    leds[i * 6 + r / 3] = CHSV(hue, 255, 255);
+  }
+  r = ((r + 1) % 18);
+}
+
+void roundRainbow(uint8_t hue)
+{
+  // 回転
+  static uint8_t r = 0;
+  fill_rainbow(leds, 24, r, 43);
+
+  r++;
 }
