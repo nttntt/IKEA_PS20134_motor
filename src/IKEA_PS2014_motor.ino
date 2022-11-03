@@ -1,4 +1,4 @@
-#define FASTLED_ESP32_I2S true // 6cm*5.5 (6.8cm)  9.5*5.5
+#define FASTLED_ESP32_I2S true
 #include <FastLED.h>
 
 // モーターの制御Pin
@@ -25,12 +25,13 @@
 #define DATA_PIN 22
 #define LED_TYPE WS2812B
 #define COLOR_ORDER RGB
-#define NUM_LEDS 32
+#define NUM_LEDS 44
 #define BRIGHTNESS 255
 CRGB leds[NUM_LEDS];
 
 // 移動方向
 volatile int8_t gDirection = 0;
+volatile int8_t gHue = 0;
 
 uint8_t motionControl(void);
 
@@ -119,18 +120,23 @@ void setup()
   xTaskCreatePinnedToCore(motorTask, "motorTask", 8192, NULL, 1, NULL, 0);
   delay(10); // 立ち上がり超音波センサーにノイズが乗るのでウエイト　　他の処理が入って時間かかるようになったら消してOK
 }
+typedef void (*SimplePatternList[])();
+SimplePatternList gPatterns = {gradation, flash, rainbow, solid, rotateColor, round, run};
+#define ARRAY_SIZE(A) (sizeof(A) / sizeof((A)[0]))
+uint8_t gCurrentPatternNumber = 0;
 
 void loop()
 {
-  static uint8_t hue = 0;
   uint8_t changeColor = 0;
 
   changeColor = motionControl();
   if (changeColor)
   {
-    hue += 32;
+    gCurrentPatternNumber = (gCurrentPatternNumber + 1) % (ARRAY_SIZE(gPatterns));
+    // gHue += 32;
   }
-  roundRainbow(hue);
+  gPatterns[gCurrentPatternNumber]();
+  // solid();
   FastLED.show();
 
   delay(50);
@@ -281,33 +287,4 @@ uint8_t motionControl()
     Serial.println("");
   }
   return 0;
-}
-
-void solid(uint8_t hue)
-{
-  // 普通の光
-
-  fill_solid(leds, NUM_LEDS, CHSV(hue, 255, 255));
-}
-
-void round(uint8_t hue)
-{
-  // 回転
-  static uint8_t r = 0;
-
-  fadeToBlackBy(leds, 24, 255);
-  for (uint8_t i = 0; i < 4; ++i)
-  {
-    leds[i * 6 + r / 3] = CHSV(hue, 255, 255);
-  }
-  r = ((r + 1) % 18);
-}
-
-void roundRainbow(uint8_t hue)
-{
-  // 回転
-  static uint8_t r = 0;
-  fill_rainbow(leds, 24, r, 43);
-
-  r++;
 }
