@@ -1,9 +1,7 @@
-
 void solid()
 {
     // 普通の光
-
-    fill_solid(leds, NUM_LEDS, CHSV(gHue, 255, 255));
+    fill_solid(leds, NUM_LEDS, currentColor());
 }
 
 void round()
@@ -12,12 +10,13 @@ void round()
     static uint8_t r = 0;
 
     fadeToBlackBy(leds, NUM_LEDS, 255);
+    leds[r / 3] = currentColor();
+    leds[r / 3 + 34] = leds[r / 3];
     for (uint8_t i = 0; i < 4; ++i)
     {
-        leds[i * 6 + r / 5 + 10] = CHSV(gHue, 255, 255);
+        leds[i * 6 + r / 5 + 10] = leds[r / 3];
     }
-    leds[r / 3] = CHSV(gHue, 255, 255);
-    leds[r / 3 + 34] = CHSV(gHue, 255, 255);
+
     r = ((r + 1) % 30);
 }
 
@@ -40,35 +39,33 @@ void rotateColor()
 void flash()
 {
     // チカチカ
-    static uint8_t sChanceOfFlash = 64;
+    uint8_t chanceOfFlash = 64;
 
     fadeToBlackBy(leds, NUM_LEDS, 50);
 
-    if (random8() < sChanceOfFlash)
+    if (random8() < chanceOfFlash)
     {
-        leds[random8(NUM_LEDS)] += CRGB::White;
+        leds[random8(NUM_LEDS)] = currentColor();
     }
 }
 void gradation()
 {
-    static uint8_t sPattern = 4;
     static uint8_t r = 0;
-    //    sPattern = (sPattern + getDeltaY(1) + 8) % 8; // 0~7(Rotateあり）
-
     CRGBPalette16 currentPalette;
-    switch (sPattern)
+
+    switch (gVariation % 8)
     {
     case 0:
-        currentPalette = CloudColors_p;
+        currentPalette = OceanColors_p;
         break; // blue and white
     case 1:
-        currentPalette = LavaColors_p;
+        currentPalette = ForestColors_p;
         break; // orange, red, black and yellow),
     case 2:
-        currentPalette = OceanColors_p;
+        currentPalette = LavaColors_p;
         break; // blue, cyan and white
     case 3:
-        currentPalette = ForestColors_p;
+        currentPalette = PartyColors_p;
         break; // greens and blues
     case 4:
         currentPalette = RainbowColors_p;
@@ -77,7 +74,7 @@ void gradation()
         currentPalette = RainbowStripeColors_p;
         break; // single colour, black space, next colour and so forth
     case 6:
-        currentPalette = PartyColors_p;
+        currentPalette = CloudColors_p;
         break; // red, yellow, orange, purple and blue
     case 7:
         currentPalette = HeatColors_p;
@@ -93,6 +90,146 @@ void run()
 {
     static uint8_t r = 0;
     fadeToBlackBy(leds, NUM_LEDS, 100);
-    leds[r/2] = CRGB::White;
-    r = (r + 1) % (NUM_LEDS*2);
+    if (r < NUM_LEDS)
+    {
+        leds[r] = currentColor();
+    }
+    else
+    {
+        leds[NUM_LEDS * 2 - r - 1] = currentColor();
+    }
+    r = (r + 1) % (NUM_LEDS * 2);
+}
+
+CRGB currentColor(void)
+{
+    switch (gVariation % 8)
+    {
+    case 0:
+        return CRGB::Blue;
+    case 1:
+        return CRGB::Red;
+    case 2:
+        return CRGB::Green;
+    case 3:
+        return CRGB::Yellow;
+    case 4:
+        return CRGB::Purple;
+    case 5:
+        return CRGB::Cyan;
+    case 6:
+        return CRGB::HotPink;
+    case 7:
+        return CRGB::White;
+    }
+}
+
+void explosion(void)
+{
+    static uint16_t sStep = 0;
+    CRGBPalette16 currentPalette;
+    if (sStep == 0)
+    {
+        while (!digitalRead(LOWER_SW_PIN))
+        {
+            gDirection = 1;
+            delay(10);
+        }
+        gDirection = 0;
+    }
+    else if (sStep < 100)
+    {
+        fadeToBlackBy(leds, NUM_LEDS, 50);
+    }
+    else if (sStep < 170)
+    {
+        uint8_t chanceOfFlash = sStep * 2;
+
+        fadeToBlackBy(leds, NUM_LEDS, 50);
+
+        if (random8() < chanceOfFlash)
+        {
+            leds[random8(NUM_LEDS)] = CRGB::White;
+        }
+    }
+    else if (sStep < 177)
+    {
+        uint8_t chanceOfFlash = 200;
+
+        if (digitalRead(UPPER_SW_PIN))
+        {
+            gDirection = 0;
+        }
+        else
+        {
+            gDirection = -1;
+        }
+
+        fadeToBlackBy(leds, NUM_LEDS, 10);
+
+        if (random8() < chanceOfFlash)
+        {
+            leds[random8(NUM_LEDS)] = CRGB::White;
+        }
+    }
+    else if (sStep < 280)
+    {
+        uint8_t chanceOfFlash = 200;
+
+        gDirection = 0;
+        fadeToBlackBy(leds, NUM_LEDS, 5);
+
+        if (random8() < chanceOfFlash)
+        {
+            leds[random8(NUM_LEDS)] = CRGB::White;
+        }
+    }
+    else if (sStep < 400)
+    {
+        if (digitalRead(UPPER_SW_PIN))
+        {
+            gDirection = 0;
+        }
+        else
+        {
+            gDirection = -1;
+        }
+        if (random8(20))
+        {
+            currentPalette = LavaColors_p;
+            for (uint16_t i = 0; i < NUM_LEDS; ++i)
+            {
+                leds[i] = ColorFromPalette(currentPalette, (uint8_t)((i + sStep + 100) % 256), 255);
+            }
+        }
+        else
+        {
+            fill_solid(leds, NUM_LEDS, CRGB::Black);
+        }
+    }
+    else if (sStep < 655)
+    {
+        currentPalette = HeatColors_p;
+
+        for (uint16_t i = 0; i < NUM_LEDS; ++i)
+        {
+            leds[i] = ColorFromPalette(currentPalette, (uint8_t)((655 - sStep) % 256), 255);
+        }
+    }
+    else if (sStep < 1000)
+    {
+        uint8_t chanceOfFlash = 200;
+
+        if (random8() < chanceOfFlash)
+        {
+            leds[random8(NUM_LEDS)] -= CRGB(5, 0, 0);
+        }
+    }
+    else
+    {
+        sStep = 0;
+        gDirection = 0;
+        return;
+    }
+    sStep++;
 }

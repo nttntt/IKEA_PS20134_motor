@@ -17,9 +17,9 @@
 
 // モーションコントロール関連
 #define CONTROL_THRESHOLD 800 // 上下のthreshold(cm *59)
-#define DETECT_THRESHOLD 4000 // 反応範囲
-#define OPERATE_STEP 5        // 操作判定を行うステップ数
-#define INTERVAL_STEP 8       // モーション確定のステップ数
+#define LIMIT_THRESHOLD 4000  // 反応範囲
+#define DETECT_TIME 300       // 操作判定を行う時間(ms)
+#define INTERVAL_TIME 400     // 操作間隔時間(ms)
 
 // LED関連
 #define DATA_PIN 22
@@ -29,9 +29,8 @@
 #define BRIGHTNESS 255
 CRGB leds[NUM_LEDS];
 
-// 移動方向
-volatile int8_t gDirection = 0;
-volatile int8_t gHue = 0;
+volatile int8_t gDirection = 0;  // 移動方向
+volatile uint8_t gVariation = 0; // バリエーション
 
 uint8_t motionControl(void);
 
@@ -96,6 +95,11 @@ void motorTask(void *pvParameters)
 
 void setup()
 {
+  FastLED.addLeds<LED_TYPE, DATA_PIN, COLOR_ORDER>(leds, NUM_LEDS);
+  FastLED.setBrightness(BRIGHTNESS);
+  gradation();
+  FastLED.show();
+
   Serial.begin(115200);
 
   pinMode(AIN1, OUTPUT); // モーター制御Pin & 初期化
@@ -114,47 +118,51 @@ void setup()
   pinMode(UPPER_SW_PIN, INPUT_PULLUP); // 上下限リミッター
   pinMode(LOWER_SW_PIN, INPUT_PULLUP);
 
-  FastLED.addLeds<LED_TYPE, DATA_PIN, COLOR_ORDER>(leds, NUM_LEDS);
-  FastLED.setBrightness(BRIGHTNESS);
-
+  delay(20); // 立ち上がり超音波センサーにノイズが乗るのでウエイト　他の処理が入って時間かかるようになったら消してOK
   xTaskCreatePinnedToCore(motorTask, "motorTask", 8192, NULL, 1, NULL, 0);
-  delay(10); // 立ち上がり超音波センサーにノイズが乗るのでウエイト　　他の処理が入って時間かかるようになったら消してOK
 }
 typedef void (*SimplePatternList[])();
-SimplePatternList gPatterns = {gradation, flash, rainbow, solid, rotateColor, round, run};
+SimplePatternList gPatterns = {gradation, flash, rainbow, solid, rotateColor, round, run, explosion};
 #define ARRAY_SIZE(A) (sizeof(A) / sizeof((A)[0]))
-uint8_t gCurrentPatternNumber = 0;
 
 void loop()
 {
-  uint8_t changeColor = 0;
+  uint8_t motionCount = 0;
+  static uint8_t sCurrentPatternNumber = 0;
 
-  changeColor = motionControl();
-  if (changeColor)
+  motionCount = motionControl();
+  if (motionCount == 2)
   {
-    gCurrentPatternNumber = (gCurrentPatternNumber + 1) % (ARRAY_SIZE(gPatterns));
-    // gHue += 32;
+    gVariation += 1;
   }
-  gPatterns[gCurrentPatternNumber]();
-  // solid();
+  else if (motionCount == 3)
+  {
+    sCurrentPatternNumber = (sCurrentPatternNumber + 1) % (ARRAY_SIZE(gPatterns));
+  }
+  else if (motionCount == 5)
+  {
+    sCurrentPatternNumber = ARRAY_SIZE(gPatterns) - 1;
+  }
+  gPatterns[sCurrentPatternNumber]();
   FastLED.show();
 
-  delay(50);
+  delay(30);
 }
 
 uint8_t motionControl()
 {
-  static uint8_t sPhase = 0;   // コントロールのフェーズ
-  static uint8_t sCounter = 0; // カウンター
-  static uint8_t sTimes = 0;   // 反応した回数
+  static uint8_t sPhase = 0;          // コントロールのフェーズ
+  static uint8_t sCalledCount = 0;    // 呼び出された回数//////////////////
+  static uint8_t sOperatedCount = 0;  // 反応した回数
+  static uint32_t previousMillis = 0; // 最後に操作した時間
 
   digitalWrite(TRIG_PIN, LOW);
   delayMicroseconds(1);
   digitalWrite(TRIG_PIN, HIGH); // 超音波を出力
   delayMicroseconds(10);
   digitalWrite(TRIG_PIN, LOW);
-  int32_t duration = pulseIn(ECHO_PIN, HIGH, DETECT_THRESHOLD); //センサからの入力
-  bool upperLimit = digitalRead(UPPER_SW_PIN);                  // Limiterの状態
+  int32_t duration = pulseIn(ECHO_PIN, HIGH, LIMIT_THRESHOLD); //センサからの入力
+  bool upperLimit = digitalRead(UPPER_SW_PIN);                 // Limiterの状態
   bool lowerLimit = digitalRead(LOWER_SW_PIN);
 
   switch (sPhase)
@@ -164,77 +172,67 @@ uint8_t motionControl()
     if (duration)
     {
       sPhase = 1;
-      sCounter++;
-      sTimes++;
+      sOperatedCount = 0;
+      previousMillis = millis();
     }
     break;
 
   // モーション判別フェーズ
   case 1:
-    sCounter++;
-    if (duration)
+    if (!duration) // 通過モーションならタイマーをリセットして回数判定フェーズへ
     {
-      sTimes++;
+      opticReaction(1);
+
+      sPhase = 2;
+      sOperatedCount = 1;
+      previousMillis = millis();
     }
-    if (sCounter > OPERATE_STEP) // 判定回数に達した時
+    else if ((millis() - previousMillis) > DETECT_TIME) // 判定時間経過後操作継続中ならモーター駆動フェーズへ
     {
-      if (duration) // 操作継続中ならモーター駆動フェーズへ
-      {
-        sPhase = 4;
-      }
-      else // 反応なしなら待ち時間タイマーをセットしてダブルクリック判定フェーズへ
-      {
-        sPhase = 2;
-        sCounter = INTERVAL_STEP;
-      }
+      sPhase = 4;
     }
     break;
 
-  // ダブルクリック判定フェーズ 2回目待ち
+  // クリック回数判定フェーズ 操作待ち
   case 2:
-    sCounter--;
-    if (duration) // 2回目の反応があったら次のフェーズへ
+    if (duration) // 操作があったらリリース待ちフェーズへ
     {
+      opticReaction(1);
       sPhase = 3;
+      sOperatedCount++;
+      previousMillis = millis();
     }
-    else if (!sCounter) // 時間切れならリセット
+    else if ((millis() - previousMillis) > INTERVAL_TIME) // 判定時間経過まで無操作なら通過回数を返して終了
     {
       sPhase = 0;
-      sCounter = 0;
-      sTimes = 0;
+      return sOperatedCount;
+    }
+    else
+    {
+      opticReaction(0);
     }
     break;
 
-  // ダブルクリック判定フェーズ リリース待ち
+  // リリース待ちフェーズ
   case 3:
-    if (!duration)
+    if (!duration) // リリースされたらタイマーをリセットして回数判定フェーズへ戻る
     {
-      sPhase = 0;
-      sCounter = 0;
-      sTimes = 0;
-      return 1;
+      opticReaction(0);
+      sPhase = 2;
+      previousMillis = millis();
     }
     break;
 
   // モーター駆動フェーズ
   case 4:
-    // 無反応なら停止して操作ミスの猶予待ちのカウントダウン
-    if (!duration)
+    if (!duration) // 無反応なら停止して操作ミスの猶予待ちフェーズ
     {
       gDirection = 0;
-      sCounter--;
-      if (!sCounter)
-      {
-        sPhase = 0;
-        sCounter = 0;
-        sTimes = 0;
-      }
+      sPhase = 5;
+      previousMillis = millis();
     }
-    // 操作中なら猶予カウンターリセットして
-    else
+    else // 操作中で
     {
-      sCounter = OPERATE_STEP;
-
       // CONTROL_THRESHOLDよりも手を近づけていて端まで来ていなければモーター上昇
       if ((duration < CONTROL_THRESHOLD) && !upperLimit)
       {
@@ -246,12 +244,23 @@ uint8_t motionControl()
       {
         gDirection = 1;
       }
-
-      // リミッターにかかっているときは停止
+      // それ以外はとりあえず停止
       else
       {
         gDirection = 0;
       }
+    }
+    break;
+
+  // 操作ミスの猶予待ちフェーズ
+  case 5:
+    if (duration) // 操作があればモーター駆動フェーズに戻る
+    {
+      sPhase = 4;
+    }
+    else if ((millis() - previousMillis) > INTERVAL_TIME) // 判定時間経過まで無操作ならモーター駆動終了
+    {
+      sPhase = 0;
     }
     break;
   }
@@ -259,7 +268,6 @@ uint8_t motionControl()
   // パラメーター表示
   if (sPhase)
   {
-    Serial.print(sCounter);
     Serial.print(" |");
     for (uint8_t i = 0; i < 22; ++i)
     {
@@ -280,11 +288,25 @@ uint8_t motionControl()
     Serial.print(" Phase");
     Serial.print(sPhase);
     Serial.print(" Times");
-    Serial.print(sTimes);
+    Serial.print(sOperatedCount);
     Serial.print(" Direction");
     Serial.print(gDirection);
 
     Serial.println("");
   }
   return 0;
+}
+
+void opticReaction(uint8_t turnOff)
+{
+  if (turnOff)
+  {
+    FastLED.setBrightness(0);
+    FastLED.show();
+  }
+  else
+  {
+    FastLED.setBrightness(BRIGHTNESS);
+    FastLED.show();
+  }
 }
