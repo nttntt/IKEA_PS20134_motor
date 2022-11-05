@@ -222,7 +222,7 @@ void explosion(void)
 
         if (random8() < chanceOfFlash)
         {
-            leds[random8(NUM_LEDS)] -= CRGB(5, 0, 0);
+            leds[random8(NUM_LEDS)] -= CRGB(1, 0, 0);
         }
     }
     else
