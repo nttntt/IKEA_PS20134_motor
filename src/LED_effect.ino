@@ -1,7 +1,7 @@
 void solid()
 {
     // 普通の光
-    fill_solid(leds, NUM_LEDS, currentColor());
+    fill_solid(leds, NUM_LEDS, currentColor(gVariation));
 }
 
 void round()
@@ -10,22 +10,20 @@ void round()
     static uint8_t r = 0;
 
     fadeToBlackBy(leds, NUM_LEDS, 255);
-    leds[r / 3] = currentColor();
+    leds[r / 3] = currentColor(gVariation+1);
     leds[r / 3 + 34] = leds[r / 3];
     for (uint8_t i = 0; i < 4; ++i)
     {
         leds[i * 6 + r / 5 + 10] = leds[r / 3];
     }
-
     r = ((r + 1) % 30);
 }
 
 void rainbow()
 {
-    // 回転
+    // LEDが1周6個なので256/6でDeltaHueは43
     static uint8_t r = 0;
     fill_rainbow(leds, NUM_LEDS, r, 43);
-
     r++;
 }
 
@@ -45,7 +43,7 @@ void flash()
 
     if (random8() < chanceOfFlash)
     {
-        leds[random8(NUM_LEDS)] = currentColor();
+        leds[random8(NUM_LEDS)] = currentColor(gVariation+7);
     }
 }
 void gradation()
@@ -92,18 +90,18 @@ void run()
     fadeToBlackBy(leds, NUM_LEDS, 100);
     if (r < NUM_LEDS)
     {
-        leds[r] = currentColor();
+        leds[r] = currentColor(gVariation);
     }
     else
     {
-        leds[NUM_LEDS * 2 - r - 1] = currentColor();
+        leds[NUM_LEDS * 2 - r - 1] = currentColor(gVariation);
     }
     r = (r + 1) % (NUM_LEDS * 2);
 }
 
-CRGB currentColor(void)
+CRGB currentColor(uint8_t variation)
 {
-    switch (gVariation % 8)
+    switch (variation % 8)
     {
     case 0:
         return CRGB::Blue;
@@ -133,7 +131,7 @@ void explosion(void)
         while (!digitalRead(LOWER_SW_PIN))
         {
             gDirection = 1;
-            delay(10);
+            delay(1);
         }
         gDirection = 0;
     }
@@ -229,6 +227,7 @@ void explosion(void)
     {
         sStep = 0;
         gDirection = 0;
+        gCurrentPatternNumber = 0;
         return;
     }
     sStep++;
